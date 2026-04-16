@@ -1,20 +1,19 @@
-# Encrypted Runner
-
-This folder is a repo-ready scaffold for a dedicated GitHub Actions runner that executes protected scripts with encrypted runtime payloads.
+# Encrypted EPROC Runner
 
 ## What it contains
 
-- `.github/workflows/main.yml`: dispatches the get-eproc-session run with encrypted payload + optional callback URL.
-- `scripts/get-session.py`: SeleniumBase EPROC login/captcha/OTP flow.
+- `.github/workflows/main.yml`: workflow_dispatch runner for `get-session.py` with encrypted payload and optional callback URL.
+- `scripts/get-session.py`: SeleniumBase EPROC login/captcha/OTP flow with RSA+AES-GCM payload decryption and callback support.
 - `requirements.txt`: Python dependencies for workflow execution.
 
-## Required GitHub Secret
+## Required keys
 
-- `EPROC_PRIVATE_KEY_PEM`: RSA private key in PEM format used to decrypt payload envelopes.
+- Trigger side: `ENCRYPTED_RUNNER_PUBLIC_KEY_PEM` or `ENCRYPTED_RUNNER_PUBLIC_KEY_B64`.
+- GitHub Actions secret: `EPROC_PRIVATE_KEY_PEM`.
 
-## Payload contract
+## Encrypted payload contract
 
-The workflow input `payload` must be a JSON envelope with:
+The workflow input `payload` must be an encrypted envelope:
 
 ```json
 {
@@ -27,7 +26,7 @@ The workflow input `payload` must be a JSON envelope with:
 }
 ```
 
-After decrypt, plaintext JSON must include:
+Decrypted JSON payload:
 
 ```json
 {
@@ -35,7 +34,7 @@ After decrypt, plaintext JSON must include:
   "senha": "string",
   "otpExportData": "string",
   "otpProfileMatch": "optional string",
-  "otpProfileIndex": "optional number",
+  "otpProfileIndex": 1,
   "exp": 1735689600,
   "context": {
     "script": "get-eproc-session",
@@ -44,8 +43,36 @@ After decrypt, plaintext JSON must include:
 }
 ```
 
-## Notes
+Workflow also accepts optional input:
 
-- `exp` is validated in the runner (short-lived payloads recommended, e.g. 5 minutes).
-- Plaintext credentials are never logged.
-- Full HTML is only returned in callback output (not printed in logs).
+- `callback_url`: if provided, the script POSTs final result JSON to this URL.
+
+## Output contract
+
+Success output:
+
+```json
+{
+  "status": "success",
+  "phpsessid": "string",
+  "page_source_html": "string",
+  "page_source_html_length": 12345
+}
+```
+
+Error output:
+
+```json
+{
+  "status": "error",
+  "step": "unknown",
+  "error": "unexpected_exception",
+  "message": "string"
+}
+```
+
+## Security note
+
+- `workflow_dispatch` inputs are visible in GitHub run metadata/log context.
+- Use encrypted payload for runtime credentials.
+- The runner validates `exp` (when present) and `context.script` (when present).

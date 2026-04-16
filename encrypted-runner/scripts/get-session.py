@@ -1,12 +1,16 @@
-"""EPROC login runner with plain payload/env credentials and optional callback."""
+"""EPROC login runner with encrypted payload support and callback output."""
 
 import base64
 import json
 import os
+import time
 from time import sleep
 from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dotenv import load_dotenv
 import pyotp
 from seleniumbase import Driver
@@ -14,6 +18,7 @@ from seleniumbase import Driver
 load_dotenv()
 
 BASE_URL = "https://eproc.jfrs.jus.br/eprocV2/externo_controlador.php"
+EXPECTED_CONTEXT_SCRIPT = "get-eproc-session"
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -40,19 +45,65 @@ def send_callback(result: dict) -> None:
 
 
 def print_json_safe(payload: dict) -> None:
-    # GitHub Windows runners default to cp1252 console encoding; forcing ASCII
-    # escaping avoids UnicodeEncodeError when page HTML contains zero-width chars.
     print(json.dumps(payload, ensure_ascii=True))
 
 
+def b64decode_to_bytes(value: str, field: str) -> bytes:
+    try:
+        return base64.b64decode(value)
+    except Exception as exc:
+        raise ValueError(f"Invalid base64 field: {field}") from exc
+
+
+def decrypt_payload_from_env() -> dict:
+    private_key_pem = (os.getenv("EPROC_PRIVATE_KEY_PEM") or "").strip()
+    raw_payload = (os.getenv("RAW_PAYLOAD") or "").strip()
+
+    if not raw_payload:
+        return {}
+
+    if not private_key_pem:
+        raise ValueError("EPROC_PRIVATE_KEY_PEM is required when RAW_PAYLOAD is provided")
+
+    envelope = json.loads(raw_payload)
+    required_fields = ["v", "alg", "ek", "iv", "tag", "ct"]
+    for field in required_fields:
+        if field not in envelope:
+            raise ValueError(f"Envelope missing field: {field}")
+
+    if envelope["v"] != 1 or envelope["alg"] != "RSA-OAEP-256/AES-256-GCM":
+        raise ValueError("Unsupported envelope version/algorithm")
+
+    private_key = serialization.load_pem_private_key(private_key_pem.encode("utf-8"), password=None)
+
+    encrypted_key = b64decode_to_bytes(envelope["ek"], "ek")
+    nonce = b64decode_to_bytes(envelope["iv"], "iv")
+    tag = b64decode_to_bytes(envelope["tag"], "tag")
+    ciphertext = b64decode_to_bytes(envelope["ct"], "ct")
+
+    aes_key = private_key.decrypt(
+        encrypted_key,
+        padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+    )
+
+    plaintext = AESGCM(aes_key).decrypt(nonce, ciphertext + tag, None)
+    payload = json.loads(plaintext.decode("utf-8"))
+
+    exp = payload.get("exp")
+    if isinstance(exp, int) and int(time.time()) > exp:
+        raise ValueError("Encrypted payload has expired")
+
+    context = payload.get("context")
+    if isinstance(context, dict):
+        script = context.get("script")
+        if script and script != EXPECTED_CONTEXT_SCRIPT:
+            raise ValueError("Encrypted payload context script mismatch")
+
+    return payload
+
+
 def load_runtime_credentials() -> tuple[str, str, str, str, int | None]:
-    payload_raw = (os.getenv("RAW_PAYLOAD") or "").strip()
-    payload: dict = {}
-    if payload_raw:
-        try:
-            payload = json.loads(payload_raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError("RAW_PAYLOAD is not valid JSON") from exc
+    payload = decrypt_payload_from_env()
 
     usuario = str(payload.get("usuario") or os.getenv("EPROC_USUARIO") or "").strip()
     senha = str(payload.get("senha") or os.getenv("EPROC_SENHA") or "").strip()
@@ -67,9 +118,9 @@ def load_runtime_credentials() -> tuple[str, str, str, str, int | None]:
         otp_profile_index = int(str(raw_index).strip())
 
     if not usuario or not senha:
-        raise ValueError("EPROC_USUARIO and EPROC_SENHA must be set (payload or env)")
+        raise ValueError("EPROC_USUARIO and EPROC_SENHA must be set")
     if not otp_export_data:
-        raise ValueError("OTP_EXPORT_DATA must be set (payload or env)")
+        raise ValueError("OTP_EXPORT_DATA must be set")
 
     return usuario, senha, otp_export_data, otp_profile_match, otp_profile_index
 
