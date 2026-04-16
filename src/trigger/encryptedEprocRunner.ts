@@ -6,9 +6,9 @@ const DEFAULT_SCRIPT_ID = "get-session";
 
 type EncryptedEprocPayload = {
   script?: string;
-  usuario: string;
-  senha: string;
-  otpExportData: string;
+  usuario?: string;
+  senha?: string;
+  otpExportData?: string;
   otpProfileMatch?: string;
   otpProfileIndex?: number;
   ref?: string;
@@ -173,8 +173,24 @@ export const runEncryptedEprocCaptureAndWait = task({
     const callbackTimeout = payload.callbackTimeout ?? "30m";
     const ttlSeconds = payload.ttlSeconds ?? 300;
 
-    if (!payload.usuario?.trim() || !payload.senha?.trim() || !payload.otpExportData?.trim()) {
-      throw new Error("usuario, senha and otpExportData are required.");
+    const usuario = payload.usuario?.trim() || process.env.EPROC_USUARIO?.trim() || "";
+    const senha = payload.senha?.trim() || process.env.EPROC_SENHA?.trim() || "";
+    const otpExportData =
+      payload.otpExportData?.trim() || process.env.OTP_EXPORT_DATA?.trim() || "";
+    const otpProfileMatch =
+      payload.otpProfileMatch?.trim() ||
+      process.env.OTP_PROFILE_MATCH?.trim() ||
+      undefined;
+    const otpProfileIndex =
+      payload.otpProfileIndex ??
+      (process.env.OTP_PROFILE_INDEX !== undefined
+        ? Number.parseInt(process.env.OTP_PROFILE_INDEX, 10)
+        : undefined);
+
+    if (!usuario || !senha || !otpExportData) {
+      throw new Error(
+        "Missing credentials. Provide payload fields or set EPROC_USUARIO, EPROC_SENHA and OTP_EXPORT_DATA in env."
+      );
     }
 
     const waitToken = await wait.createToken({
@@ -184,11 +200,11 @@ export const runEncryptedEprocCaptureAndWait = task({
 
     const encryptedPayload = buildEncryptedEnvelope(
       {
-        usuario: payload.usuario.trim(),
-        senha: payload.senha.trim(),
-        otpExportData: payload.otpExportData.trim(),
-        otpProfileMatch: payload.otpProfileMatch?.trim() || undefined,
-        otpProfileIndex: payload.otpProfileIndex,
+        usuario,
+        senha,
+        otpExportData,
+        otpProfileMatch,
+        otpProfileIndex,
         exp: Math.floor(Date.now() / 1000) + ttlSeconds,
         context: {
           script: scriptId,
