@@ -4,7 +4,6 @@ import base64
 import json
 import os
 import time
-from time import sleep
 from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
@@ -13,12 +12,29 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dotenv import load_dotenv
 import pyotp
+from selenium.common.exceptions import UnexpectedAlertPresentException
 from seleniumbase import Driver
 
 load_dotenv()
 
 BASE_URL = "https://eproc.jfrs.jus.br/eprocV2/externo_controlador.php"
 EXPECTED_CONTEXT_SCRIPT = "get-eproc-session"
+FIRST_CAPTCHA_URL = (
+    "https://eproc.jfrs.jus.br/eprocV2/externo_controlador.php"
+    "?acao=principal&acao_retorno=login"
+)
+SECOND_CAPTCHA_URL = "https://eproc.jfrs.jus.br/eprocV2/index.php"
+PANEL_URL_CONTAINS = "acao=painel_adv_listar"
+PANEL_READY_SELECTOR = 'a[aria-describedby="processoscomprazoemaberto"]'
+CAPTCHA_BUTTON_SELECTORS = [
+    "button[onclick*=\"Submit('login')\"][value='Enviar']",
+    "button:contains('Enviar')",
+    "button[onclick*='Submit']",
+]
+COOKIE_POLL_SECONDS = 0.3
+STEP_POLL_SECONDS = 0.3
+CAPTCHA_SUBMIT_ATTEMPTS = 10
+CAPTCHA_RETRY_WAIT_SECONDS = 0.8
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -100,6 +116,88 @@ def decrypt_payload_from_env() -> dict:
             raise ValueError("Encrypted payload context script mismatch")
 
     return payload
+
+
+def has_element(driver: Driver, selector: str, timeout_seconds: float = 0.8) -> bool:
+    try:
+        return driver.wait_for_element(selector, timeout=timeout_seconds) is not None
+    except Exception:
+        return False
+
+
+def wait_for_phpsessid(driver: Driver, timeout_seconds: float = 10.0) -> str | None:
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        for cookie in driver.get_cookies():
+            if cookie.get("name") == "PHPSESSID" and cookie.get("value"):
+                return cookie["value"]
+        time.sleep(COOKIE_POLL_SECONDS)
+    return None
+
+
+def detect_post_login_step(driver: Driver, timeout_seconds: float = 20.0) -> str:
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        current_url = (driver.get_current_url() or "").split("#")[0]
+        if has_element(driver, "#txtAcessoCodigo", timeout_seconds=0.5):
+            return "otp"
+        if (
+            current_url == FIRST_CAPTCHA_URL
+            or current_url == SECOND_CAPTCHA_URL
+            or has_element(driver, "button:contains('Enviar')", timeout_seconds=0.5)
+        ):
+            return "captcha"
+        if PANEL_URL_CONTAINS in current_url:
+            return "panel"
+        time.sleep(STEP_POLL_SECONDS)
+    raise RuntimeError("Timed out waiting for post-login step (captcha, OTP, or painel)")
+
+
+def click_captcha_submit(driver: Driver, step_label: str) -> None:
+    for attempt in range(1, CAPTCHA_SUBMIT_ATTEMPTS + 1):
+        for selector in CAPTCHA_BUTTON_SELECTORS:
+            try:
+                driver.wait_for_element(selector, timeout=3)
+                driver.click(selector)
+                return
+            except UnexpectedAlertPresentException:
+                try:
+                    alert = driver.switch_to.alert
+                    alert_text = alert.text or ""
+                    alert.accept()
+                    print(
+                        f"{step_label}: captcha still verifying "
+                        f"(attempt {attempt}/{CAPTCHA_SUBMIT_ATTEMPTS}): {alert_text}"
+                    )
+                except Exception:
+                    pass
+                time.sleep(CAPTCHA_RETRY_WAIT_SECONDS)
+                break
+            except Exception:
+                continue
+    raise RuntimeError(f"{step_label}: could not submit captcha")
+
+
+def handle_captcha_step(driver: Driver, step_number: int, expected_next_step: str) -> None:
+    step_label = f"Captcha step {step_number}"
+    print(f"{step_label}: waiting for submit button...")
+    driver.wait_for_element("button:contains('Enviar')", timeout=20)
+    try:
+        driver.uc_gui_click_captcha()
+        print(f"{step_label}: auto-solver click executed")
+    except Exception as exc:
+        print(f"{step_label}: auto-solver attempt note: {exc}")
+
+    print(f"{step_label}: submitting and waiting for progress...")
+    click_captcha_submit(driver, step_label=step_label)
+
+    observed = detect_post_login_step(driver, timeout_seconds=25.0)
+    if observed != expected_next_step:
+        raise RuntimeError(
+            f"{step_label}: unexpected post-submit step "
+            f"(expected {expected_next_step}, got {observed})"
+        )
+    print(f"{step_label}: progressed to {observed}")
 
 
 def load_runtime_credentials() -> tuple[str, str, str, str, int | None]:
@@ -213,13 +311,7 @@ def get_session_with_phpsessid(max_attempts: int = 3):
         driver = Driver(uc=True, uc_cdp_events=True, headless=headless_mode)
         try:
             driver.get(BASE_URL)
-            sleep(2)
-            cookies = driver.get_cookies()
-            phpsessid = None
-            for cookie in cookies:
-                if cookie.get("name") == "PHPSESSID":
-                    phpsessid = cookie.get("value")
-                    break
+            phpsessid = wait_for_phpsessid(driver, timeout_seconds=10.0)
             if phpsessid:
                 print("PHPSESSID obtained from cookies")
                 return driver, phpsessid
@@ -235,75 +327,30 @@ def get_session_with_phpsessid(max_attempts: int = 3):
 def get_credentials_workflow(driver, first_phpsessid: str):
     usuario, senha, otp_export_data, otp_profile_match, otp_profile_index = load_runtime_credentials()
 
-    sleep(2)
     print("Logging in...")
     driver.wait_for_element("#txtUsuario", timeout=15)
     driver.click("#txtUsuario")
-    sleep(0.2)
     driver.type("#txtUsuario", usuario)
-    sleep(0.5)
     driver.click("#pwdSenha")
-    sleep(0.2)
     driver.type("#pwdSenha", senha)
-    sleep(1)
     driver.click("#sbmEntrar")
 
-    print("Handling first captcha...")
-    try:
-        driver.wait_for_element("button[onclick*=\"Submit('login')\"]", timeout=15)
-    except Exception:
-        driver.wait_for_element("button:contains('Enviar')", timeout=15)
-    sleep(2)
-    try:
-        driver.uc_gui_click_captcha()
-        print("First captcha auto-solved successfully")
-    except Exception as e:
-        print(f"First captcha auto-solve attempt: {e}")
-    sleep(3)
-    print("Submitting first captcha...")
-    try:
-        driver.click("button[onclick*=\"Submit('login')\"][value='Enviar']")
-    except Exception:
-        try:
-            driver.click("button:contains('Enviar')")
-        except Exception:
-            driver.click("button[onclick*='Submit']")
-    sleep(5)
+    step = detect_post_login_step(driver, timeout_seconds=20.0)
+    if step != "captcha":
+        raise RuntimeError(f"Unexpected post-login step before captcha resolution: {step}")
 
-    print("Handling second captcha...")
-    try:
-        driver.wait_for_element("button[onclick*=\"Submit('login')\"]", timeout=15)
-    except Exception:
-        driver.wait_for_element("button:contains('Enviar')", timeout=15)
-    sleep(2)
-    try:
-        driver.uc_gui_click_captcha()
-        print("Second captcha auto-solved successfully")
-    except Exception as e:
-        print(f"Second captcha auto-solve attempt: {e}")
-    sleep(3)
-
-    print("Submitting second captcha...")
-    try:
-        driver.click("button[onclick*=\"Submit('login')\"][value='Enviar']")
-    except Exception:
-        try:
-            driver.click("button:contains('Enviar')")
-        except Exception:
-            driver.click("button[onclick*='Submit']")
-    sleep(5)
+    handle_captcha_step(driver, step_number=1, expected_next_step="captcha")
+    handle_captcha_step(driver, step_number=2, expected_next_step="otp")
 
     driver.wait_for_element("#txtAcessoCodigo", timeout=20)
     print("Entering 2FA...")
     driver.click("#txtAcessoCodigo")
-    sleep(0.2)
     driver.type(
         "#txtAcessoCodigo",
         get_2fa_code_for_trf4(otp_export_data, otp_profile_match, otp_profile_index),
     )
-    sleep(1)
     driver.click("#btnValidar")
-    driver.wait_for_element('a[aria-describedby="processoscomprazoemaberto"]', timeout=30)
+    driver.wait_for_element(PANEL_READY_SELECTOR, timeout=30)
 
     page_source = driver.page_source
 
