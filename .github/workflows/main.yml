@@ -1,0 +1,46 @@
+name: Encrypted Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Script to run"
+        required: true
+        type: choice
+        options:
+          - get-session
+      payload:
+        description: "Encrypted payload envelope JSON"
+        required: true
+      callback_url:
+        description: "Callback URL to POST script result"
+        required: false
+        default: ""
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r encrypted-runner/requirements.txt
+
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run encrypted script
+        env:
+          RAW_PAYLOAD: ${{ github.event.inputs.payload }}
+          RAW_CALLBACK: ${{ github.event.inputs.callback_url }}
+          EXPECTED_SCRIPT: ${{ github.event.inputs.script }}
+          EPROC_PRIVATE_KEY_PEM: ${{ secrets.EPROC_PRIVATE_KEY_PEM }}
+        run: xvfb-run python encrypted-runner/scripts/${{ github.event.inputs.script }}.py

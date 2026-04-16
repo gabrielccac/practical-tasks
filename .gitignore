@@ -1,0 +1,8 @@
+.env
+.env.*
+.codex
+.trigger/
+node_modules/
+encrypted-runner/keys/
+*.pyc
+__pycache__/
