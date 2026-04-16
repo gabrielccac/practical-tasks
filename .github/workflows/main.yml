@@ -38,6 +38,7 @@ jobs:
       - name: Run get-eproc-session script
         env:
           HEADLESS: "false"
+          PYTHONUTF8: "1"
           RAW_PAYLOAD: ${{ github.event.inputs.payload }}
           RAW_CALLBACK: ${{ github.event.inputs.callback_url }}
           EPROC_USUARIO: ${{ secrets.EPROC_USUARIO }}

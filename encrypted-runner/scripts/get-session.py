@@ -39,6 +39,12 @@ def send_callback(result: dict) -> None:
         pass
 
 
+def print_json_safe(payload: dict) -> None:
+    # GitHub Windows runners default to cp1252 console encoding; forcing ASCII
+    # escaping avoids UnicodeEncodeError when page HTML contains zero-width chars.
+    print(json.dumps(payload, ensure_ascii=True))
+
+
 def load_runtime_credentials() -> tuple[str, str, str, str, int | None]:
     payload_raw = (os.getenv("RAW_PAYLOAD") or "").strip()
     payload: dict = {}
@@ -264,7 +270,7 @@ def main():
         driver, first_phpsessid = get_session_with_phpsessid()
         result = get_credentials_workflow(driver, first_phpsessid)
         send_callback(result)
-        print(json.dumps(result, ensure_ascii=False))
+        print_json_safe(result)
         return result
     except Exception as exc:
         error_result = {
@@ -277,7 +283,7 @@ def main():
             send_callback(error_result)
         except Exception as callback_error:
             print(f"Callback failed: {callback_error}")
-        print(json.dumps(error_result, ensure_ascii=False))
+        print_json_safe(error_result)
         raise
     finally:
         if driver is not None:
