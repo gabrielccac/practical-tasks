@@ -22,10 +22,11 @@ FIRST_CAPTCHA_URL = (
 SECOND_CAPTCHA_URL = "https://eproc.jfrs.jus.br/eprocV2/index.php"
 PANEL_URL_CONTAINS = "acao=painel_adv_listar"
 PANEL_READY_SELECTOR = 'a[aria-describedby="processoscomprazoemaberto"]'
-CAPTCHA_WAIT_SECONDS = 5.0
-CAPTCHA_RETRY_ATTEMPTS = 5
-CAPTCHA_RETRY_WAIT_SECONDS = 1.5
+CAPTCHA_WAIT_SECONDS = 8.0
+CAPTCHA_RETRY_ATTEMPTS = 8
+CAPTCHA_RETRY_WAIT_SECONDS = 2.0
 EXPECTED_CONTEXT_SCRIPT = "get-eproc-session"
+ALERT_WAIT_SECONDS = 2.0
 
 
 def log(level: str, message: str, **meta: Any) -> None:
@@ -150,6 +151,18 @@ def send_callback(url: str | None, result: dict[str, Any]) -> None:
         log("ERROR", "Callback failed", error=str(exc))
 
 
+def dismiss_alert_if_present(driver, wait_seconds: float = ALERT_WAIT_SECONDS) -> bool:
+    try:
+        alert = driver.switch_to.alert
+        alert_text = alert.text or ""
+        alert.accept()
+        log("INFO", "Captcha alert acknowledged", alert_text=alert_text)
+        time.sleep(wait_seconds)
+        return True
+    except Exception:
+        return False
+
+
 def get_phpsessid_from_cookies(driver, timeout_seconds: float = 10.0) -> str | None:
     start = time.time()
     while time.time() - start < timeout_seconds:
@@ -170,11 +183,7 @@ def click_captcha_submit(driver, max_attempts: int = CAPTCHA_RETRY_ATTEMPTS) -> 
                 driver.click(selector)
                 return
             except UnexpectedAlertPresentException:
-                try:
-                    alert = driver.switch_to.alert
-                    alert.accept()
-                except Exception:
-                    pass
+                dismiss_alert_if_present(driver, wait_seconds=CAPTCHA_RETRY_WAIT_SECONDS)
                 log("INFO", "Captcha still verifying", attempt=attempt, max_attempts=max_attempts)
                 time.sleep(CAPTCHA_RETRY_WAIT_SECONDS)
                 break
@@ -187,15 +196,21 @@ def click_captcha_submit(driver, max_attempts: int = CAPTCHA_RETRY_ATTEMPTS) -> 
 def wait_until_url_contains(driver, expected_fragment: str, timeout_seconds: float = 30.0) -> None:
     start = time.time()
     while time.time() - start < timeout_seconds:
-        if expected_fragment in (driver.get_current_url() or ""):
-            return
-        time.sleep(0.3)
+        try:
+            if expected_fragment in (driver.get_current_url() or ""):
+                return
+            time.sleep(0.3)
+        except UnexpectedAlertPresentException:
+            dismiss_alert_if_present(driver)
     raise WorkflowError("panel", "url_wait_timeout", "Timed out waiting for painel URL")
 
 
 def has_element(driver, selector: str, timeout_seconds: float = 0.8) -> bool:
     try:
         return driver.wait_for_element(selector, timeout=timeout_seconds) is not None
+    except UnexpectedAlertPresentException:
+        dismiss_alert_if_present(driver)
+        return False
     except Exception:
         return False
 
@@ -203,20 +218,23 @@ def has_element(driver, selector: str, timeout_seconds: float = 0.8) -> bool:
 def detect_post_login_step(driver, timeout_seconds: float = 20.0) -> str:
     start = time.time()
     while time.time() - start < timeout_seconds:
-        current_url = (driver.get_current_url() or "").split("#")[0]
+        try:
+            current_url = (driver.get_current_url() or "").split("#")[0]
 
-        if has_element(driver, "#txtAcessoCodigo", timeout_seconds=0.5):
-            return "otp"
-        if (
-            current_url == FIRST_CAPTCHA_URL
-            or current_url == SECOND_CAPTCHA_URL
-            or has_element(driver, "button:contains('Enviar')", timeout_seconds=0.5)
-        ):
-            return "captcha"
-        if PANEL_URL_CONTAINS in current_url:
-            return "panel"
+            if has_element(driver, "#txtAcessoCodigo", timeout_seconds=0.5):
+                return "otp"
+            if (
+                current_url == FIRST_CAPTCHA_URL
+                or current_url == SECOND_CAPTCHA_URL
+                or has_element(driver, "button:contains('Enviar')", timeout_seconds=0.5)
+            ):
+                return "captcha"
+            if PANEL_URL_CONTAINS in current_url:
+                return "panel"
 
-        time.sleep(0.3)
+            time.sleep(0.3)
+        except UnexpectedAlertPresentException:
+            dismiss_alert_if_present(driver)
 
     raise WorkflowError("login", "step_timeout", "Timed out waiting for post-login step")
 
