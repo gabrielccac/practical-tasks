@@ -4,8 +4,8 @@ This folder is a repo-ready scaffold for a dedicated GitHub Actions runner that 
 
 ## What it contains
 
-- `.github/workflows/main.yml`: dispatches script runs with encrypted payload + optional callback URL.
-- `scripts/capture-eproc.py`: SeleniumBase EPROC login/captcha/OTP flow.
+- `.github/workflows/main.yml`: dispatches the get-eproc-session run with encrypted payload + optional callback URL.
+- `scripts/get-session.py`: SeleniumBase EPROC login/captcha/OTP flow.
 - `requirements.txt`: Python dependencies for workflow execution.
 
 ## Required GitHub Secret
@@ -38,7 +38,7 @@ After decrypt, plaintext JSON must include:
   "otpProfileIndex": "optional number",
   "exp": 1735689600,
   "context": {
-    "script": "capture-eproc",
+    "script": "get-eproc-session",
     "triggerRunId": "run_xxx"
   }
 }

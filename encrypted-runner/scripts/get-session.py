@@ -25,6 +25,7 @@ PANEL_READY_SELECTOR = 'a[aria-describedby="processoscomprazoemaberto"]'
 CAPTCHA_WAIT_SECONDS = 5.0
 CAPTCHA_RETRY_ATTEMPTS = 5
 CAPTCHA_RETRY_WAIT_SECONDS = 1.5
+EXPECTED_CONTEXT_SCRIPT = "get-eproc-session"
 
 
 def log(level: str, message: str, **meta: Any) -> None:
@@ -61,14 +62,11 @@ def b64decode_to_bytes(value: str, field: str) -> bytes:
 def decrypt_payload_from_env() -> EprocSecrets:
     private_key_pem = (os.environ.get("EPROC_PRIVATE_KEY_PEM") or "").strip()
     raw_payload = (os.environ.get("RAW_PAYLOAD") or "").strip()
-    expected_script = (os.environ.get("EXPECTED_SCRIPT") or "").strip()
 
     if not private_key_pem:
         raise WorkflowError("decrypt", "missing_private_key", "EPROC_PRIVATE_KEY_PEM is missing")
     if not raw_payload:
         raise WorkflowError("decrypt", "missing_payload", "RAW_PAYLOAD is missing")
-    if not expected_script:
-        raise WorkflowError("decrypt", "missing_expected_script", "EXPECTED_SCRIPT is missing")
 
     try:
         envelope = json.loads(raw_payload)
@@ -113,7 +111,7 @@ def decrypt_payload_from_env() -> EprocSecrets:
     context = payload.get("context")
     if not isinstance(context, dict):
         raise WorkflowError("decrypt", "invalid_context", "Payload context is missing or invalid")
-    if context.get("script") != expected_script:
+    if context.get("script") != EXPECTED_CONTEXT_SCRIPT:
         raise WorkflowError("decrypt", "context_mismatch", "Payload context script mismatch")
 
     usuario = str(payload.get("usuario", "")).strip()

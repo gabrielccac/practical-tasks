@@ -3,12 +3,6 @@ name: Encrypted Runner
 on:
   workflow_dispatch:
     inputs:
-      script:
-        description: "Script to run"
-        required: true
-        type: choice
-        options:
-          - capture-eproc
       payload:
         description: "Encrypted payload envelope JSON"
         required: true
@@ -18,7 +12,7 @@ on:
         default: ""
 
 jobs:
-  run-script:
+  get-eproc-session:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -34,13 +28,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Install xvfb
-        run: sudo apt-get update && sudo apt-get install -y xvfb
-
-      - name: Run encrypted script
+      - name: Run get-eproc-session script
         env:
           RAW_PAYLOAD: ${{ github.event.inputs.payload }}
           RAW_CALLBACK: ${{ github.event.inputs.callback_url }}
-          EXPECTED_SCRIPT: ${{ github.event.inputs.script }}
           EPROC_PRIVATE_KEY_PEM: ${{ secrets.EPROC_PRIVATE_KEY_PEM }}
-        run: xvfb-run python scripts/${{ github.event.inputs.script }}.py
+        run: python scripts/get-session.py

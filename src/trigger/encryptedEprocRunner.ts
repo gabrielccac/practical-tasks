@@ -2,10 +2,9 @@ import "dotenv/config";
 import { createCipheriv, publicEncrypt, randomBytes, constants } from "node:crypto";
 import { logger, task, wait } from "@trigger.dev/sdk";
 
-const DEFAULT_SCRIPT_ID = "get-session";
+const EPROC_SCRIPT_ID = "get-eproc-session";
 
 type EncryptedEprocPayload = {
-  script?: string;
   usuario?: string;
   senha?: string;
   otpExportData?: string;
@@ -168,7 +167,6 @@ export const runEncryptedEprocCaptureAndWait = task({
     const workflowId = requireEnv("ENCRYPTED_RUNNER_WORKFLOW_ID");
     const publicKeyPem = getPublicKeyPem();
 
-    const scriptId = payload.script?.trim() || DEFAULT_SCRIPT_ID;
     const ref = payload.ref ?? "main";
     const callbackTimeout = payload.callbackTimeout ?? "30m";
     const ttlSeconds = payload.ttlSeconds ?? 300;
@@ -195,7 +193,7 @@ export const runEncryptedEprocCaptureAndWait = task({
 
     const waitToken = await wait.createToken({
       timeout: callbackTimeout,
-      tags: ["github-actions", `workflow:${workflowId}`, `script:${scriptId}`],
+      tags: ["github-actions", `workflow:${workflowId}`, `script:${EPROC_SCRIPT_ID}`],
     });
 
     const encryptedPayload = buildEncryptedEnvelope(
@@ -207,7 +205,7 @@ export const runEncryptedEprocCaptureAndWait = task({
         otpProfileIndex,
         exp: Math.floor(Date.now() / 1000) + ttlSeconds,
         context: {
-          script: scriptId,
+          script: EPROC_SCRIPT_ID,
           triggerRunId: ctx.run.id,
         },
       },
@@ -218,7 +216,6 @@ export const runEncryptedEprocCaptureAndWait = task({
     const dispatchBody = {
       ref,
       inputs: {
-        script: scriptId,
         payload: JSON.stringify(encryptedPayload),
         callback_url: waitToken.url,
       },
@@ -230,7 +227,7 @@ export const runEncryptedEprocCaptureAndWait = task({
       owner,
       repo,
       ref,
-      script: scriptId,
+      script: EPROC_SCRIPT_ID,
       waitTokenId: waitToken.id,
       triggerRunId: ctx.run.id,
     });
@@ -284,7 +281,7 @@ export const runEncryptedEprocCaptureAndWait = task({
         repo,
         workflowId,
         ref,
-        script: scriptId,
+        script: EPROC_SCRIPT_ID,
       },
       waitTokenId: waitToken.id,
       result: {
