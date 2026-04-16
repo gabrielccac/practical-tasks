@@ -1,3 +1,6 @@
 seleniumbase
 pyotp
 cryptography
+python-dotenv
+beautifulsoup4
+pyautogui

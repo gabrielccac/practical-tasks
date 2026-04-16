@@ -2,24 +2,10 @@ name: Encrypted Runner
 
 on:
   workflow_dispatch:
-    inputs:
-      payload:
-        description: "Encrypted payload envelope JSON"
-        required: true
-      callback_url:
-        description: "Callback URL to POST script result"
-        required: false
-        default: ""
 
 jobs:
   get-eproc-session:
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 20
 
     steps:
@@ -31,12 +17,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "encrypted-runner/requirements.txt"
+
       - name: Install dependencies
-        run: pip install -r encrypted-runner/requirements.txt
+        run: uv pip install --system -r encrypted-runner/requirements.txt
 
       - name: Run get-eproc-session script
         env:
-          RAW_PAYLOAD: ${{ github.event.inputs.payload }}
-          RAW_CALLBACK: ${{ github.event.inputs.callback_url }}
-          EPROC_PRIVATE_KEY_PEM: ${{ secrets.EPROC_PRIVATE_KEY_PEM }}
+          HEADLESS: "false"
+          EPROC_USUARIO: ${{ secrets.EPROC_USUARIO }}
+          EPROC_SENHA: ${{ secrets.EPROC_SENHA }}
+          OTP_EXPORT_DATA: ${{ secrets.OTP_EXPORT_DATA }}
+          OTP_PROFILE_MATCH: ${{ secrets.OTP_PROFILE_MATCH }}
+          OTP_PROFILE_INDEX: ${{ secrets.OTP_PROFILE_INDEX }}
         run: python encrypted-runner/scripts/get-session.py
