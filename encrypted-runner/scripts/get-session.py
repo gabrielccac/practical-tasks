@@ -25,6 +25,35 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def load_runtime_credentials() -> tuple[str, str, str, str, int | None]:
+    payload_raw = (os.getenv("RAW_PAYLOAD") or "").strip()
+    payload: dict = {}
+    if payload_raw:
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("RAW_PAYLOAD is not valid JSON") from exc
+
+    usuario = str(payload.get("usuario") or os.getenv("EPROC_USUARIO") or "").strip()
+    senha = str(payload.get("senha") or os.getenv("EPROC_SENHA") or "").strip()
+    otp_export_data = str(payload.get("otpExportData") or os.getenv("OTP_EXPORT_DATA") or "").strip()
+    otp_profile_match = str(payload.get("otpProfileMatch") or os.getenv("OTP_PROFILE_MATCH") or "TRF4").strip()
+
+    payload_index = payload.get("otpProfileIndex")
+    env_index = os.getenv("OTP_PROFILE_INDEX")
+    raw_index = payload_index if payload_index is not None else env_index
+    otp_profile_index: int | None = None
+    if raw_index is not None and str(raw_index).strip() != "":
+        otp_profile_index = int(str(raw_index).strip())
+
+    if not usuario or not senha:
+        raise ValueError("EPROC_USUARIO and EPROC_SENHA must be set (payload or env)")
+    if not otp_export_data:
+        raise ValueError("OTP_EXPORT_DATA must be set (payload or env)")
+
+    return usuario, senha, otp_export_data, otp_profile_match, otp_profile_index
+
+
 def decode_migration_data(data: str) -> list[dict]:
     decoded = base64.b64decode(data)
     accounts = []
@@ -75,28 +104,23 @@ def decode_migration_data(data: str) -> list[dict]:
     return accounts
 
 
-def get_2fa_code_for_trf4() -> str:
-    export_data = (os.getenv("OTP_EXPORT_DATA") or "").strip()
-    if not export_data:
-        raise ValueError("OTP_EXPORT_DATA environment variable not set")
-
-    match_key = (os.getenv("OTP_PROFILE_MATCH") or "TRF4").strip().upper()
-    index_value = os.getenv("OTP_PROFILE_INDEX")
-    profile_index = int(index_value) if index_value is not None and index_value != "" else None
-
-    accounts = decode_migration_data(unquote(export_data))
+def get_2fa_code_for_trf4(
+    otp_export_data: str, otp_profile_match: str, otp_profile_index: int | None
+) -> str:
+    accounts = decode_migration_data(unquote(otp_export_data))
     if not accounts:
         raise ValueError("No accounts found in OTP_EXPORT_DATA")
 
     selected = None
+    match_key = otp_profile_match.strip().upper()
     if match_key:
         for acc in accounts:
             if match_key in acc["name"].upper() or match_key in acc["issuer"].upper():
                 selected = acc
                 break
 
-    if selected is None and profile_index is not None and 0 <= profile_index < len(accounts):
-        selected = accounts[profile_index]
+    if selected is None and otp_profile_index is not None and 0 <= otp_profile_index < len(accounts):
+        selected = accounts[otp_profile_index]
     if selected is None and len(accounts) > 1:
         selected = accounts[1]
     if selected is None:
@@ -167,10 +191,7 @@ def get_session_with_phpsessid(max_attempts: int = 3):
 
 
 def get_credentials_workflow(driver, first_phpsessid: str):
-    usuario = (os.getenv("EPROC_USUARIO") or "").strip()
-    senha = (os.getenv("EPROC_SENHA") or "").strip()
-    if not usuario or not senha:
-        raise ValueError("EPROC_USUARIO and EPROC_SENHA must be set")
+    usuario, senha, otp_export_data, otp_profile_match, otp_profile_index = load_runtime_credentials()
 
     sleep(2)
     print("Logging in...")
@@ -234,7 +255,10 @@ def get_credentials_workflow(driver, first_phpsessid: str):
     print("Entering 2FA...")
     driver.click("#txtAcessoCodigo")
     sleep(0.2)
-    driver.type("#txtAcessoCodigo", get_2fa_code_for_trf4())
+    driver.type(
+        "#txtAcessoCodigo",
+        get_2fa_code_for_trf4(otp_export_data, otp_profile_match, otp_profile_index),
+    )
     sleep(1)
     driver.click("#btnValidar")
     driver.wait_for_element('a[aria-describedby="processoscomprazoemaberto"]', timeout=30)

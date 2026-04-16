@@ -2,6 +2,11 @@ name: Encrypted Runner
 
 on:
   workflow_dispatch:
+    inputs:
+      payload:
+        description: "JSON payload with usuario/senha/otpExportData"
+        required: false
+        default: ""
 
 jobs:
   get-eproc-session:
@@ -29,6 +34,7 @@ jobs:
       - name: Run get-eproc-session script
         env:
           HEADLESS: "false"
+          RAW_PAYLOAD: ${{ github.event.inputs.payload }}
           EPROC_USUARIO: ${{ secrets.EPROC_USUARIO }}
           EPROC_SENHA: ${{ secrets.EPROC_SENHA }}
           OTP_EXPORT_DATA: ${{ secrets.OTP_EXPORT_DATA }}
