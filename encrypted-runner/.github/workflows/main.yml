@@ -7,6 +7,10 @@ on:
         description: "JSON payload with usuario/senha/otpExportData"
         required: false
         default: ""
+      callback_url:
+        description: "Callback URL to receive result JSON"
+        required: false
+        default: ""
 
 jobs:
   get-eproc-session:
@@ -35,6 +39,7 @@ jobs:
         env:
           HEADLESS: "false"
           RAW_PAYLOAD: ${{ github.event.inputs.payload }}
+          RAW_CALLBACK: ${{ github.event.inputs.callback_url }}
           EPROC_USUARIO: ${{ secrets.EPROC_USUARIO }}
           EPROC_SENHA: ${{ secrets.EPROC_SENHA }}
           OTP_EXPORT_DATA: ${{ secrets.OTP_EXPORT_DATA }}

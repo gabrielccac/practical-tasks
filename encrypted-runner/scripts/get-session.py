@@ -1,14 +1,12 @@
-"""EPROC Login and Request Monitoring using Driver syntax."""
+"""EPROC login runner with plain payload/env credentials and optional callback."""
 
-from datetime import datetime
 import base64
 import json
 import os
-import re
 from time import sleep
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote
+from urllib.request import Request, urlopen
 
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import pyotp
 from seleniumbase import Driver
@@ -23,6 +21,22 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def send_callback(result: dict) -> None:
+    callback_url = (os.getenv("RAW_CALLBACK") or "").strip()
+    if not callback_url:
+        return
+
+    body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+    req = Request(
+        callback_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(req, timeout=30):
+        pass
 
 
 def load_runtime_credentials() -> tuple[str, str, str, str, int | None]:
@@ -127,35 +141,6 @@ def get_2fa_code_for_trf4(
         selected = accounts[0]
 
     return pyotp.TOTP(selected["secret"]).now()
-
-
-def extract_links_from_page_source(html_content: str) -> dict:
-    soup = BeautifulSoup(html_content, "html.parser")
-    result = {}
-
-    rs_link = soup.find("a", href="#RS")
-    if rs_link:
-        url_attr = None
-        for attr, value in rs_link.attrs.items():
-            if attr.lower() == "data-urlassinadacarregamento":
-                url_attr = value
-                break
-        if url_attr:
-            result["get_urls"] = url_attr.replace("&amp;", "&")
-
-    link2 = soup.find("a", href=re.compile(r"citacao_intimacao_prazo_aberto_listar.*vence_hoje=S"))
-    if link2:
-        result["get_due_today"] = link2.get("href", "").replace("&amp;", "&")
-
-    link3 = soup.find(
-        "a",
-        href=re.compile(r"relatorio_processo_procurador_listar"),
-        attrs={"aria-label": "Relação de Processos"},
-    )
-    if link3:
-        result["get_reports"] = link3.get("href", "").replace("&amp;", "&")
-
-    return result
 
 
 def get_session_with_phpsessid(max_attempts: int = 3):
@@ -263,22 +248,13 @@ def get_credentials_workflow(driver, first_phpsessid: str):
     driver.click("#btnValidar")
     driver.wait_for_element('a[aria-describedby="processoscomprazoemaberto"]', timeout=30)
 
-    href = driver.get_attribute('a[aria-describedby="processoscomprazoemaberto"]', "href")
-    parsed = urlparse(href)
-    open_processes_path = parsed.path.lstrip("/")
-    if parsed.query:
-        open_processes_path += f"?{parsed.query}"
-
     page_source = driver.page_source
-    extracted_links = extract_links_from_page_source(page_source)
 
     return {
+        "status": "success",
         "phpsessid": first_phpsessid,
-        "open_processes": open_processes_path,
-        "get_urls": extracted_links.get("get_urls"),
-        "due_today": extracted_links.get("get_due_today"),
-        "reports": extracted_links.get("get_reports"),
-        "run_at": datetime.now().isoformat(),
+        "page_source_html": page_source,
+        "page_source_html_length": len(page_source),
     }
 
 
@@ -286,9 +262,23 @@ def main():
     driver = None
     try:
         driver, first_phpsessid = get_session_with_phpsessid()
-        credentials = get_credentials_workflow(driver, first_phpsessid)
-        print(json.dumps(credentials, ensure_ascii=False))
-        return credentials
+        result = get_credentials_workflow(driver, first_phpsessid)
+        send_callback(result)
+        print(json.dumps(result, ensure_ascii=False))
+        return result
+    except Exception as exc:
+        error_result = {
+            "status": "error",
+            "step": "unknown",
+            "error": "unexpected_exception",
+            "message": str(exc),
+        }
+        try:
+            send_callback(error_result)
+        except Exception as callback_error:
+            print(f"Callback failed: {callback_error}")
+        print(json.dumps(error_result, ensure_ascii=False))
+        raise
     finally:
         if driver is not None:
             driver.quit()
